@@ -15,7 +15,8 @@ test('LIVE: public key reaches Auth and anonymous clients cannot read game data'
   const auth = await settings.json();
   assert.equal(auth.external.email, true);
   assert.equal(auth.mailer_autoconfirm, false, 'Email confirmation must stay enabled');
-  for (const table of ['profiles', 'tasks']) {
+  for (const table of ['profiles', 'tasks', 'challenges', 'completed_challenges',
+    'shop_items', 'purchases', 'user_inventory']) {
     const response = await get(`/rest/v1/${table}?select=id&limit=1`);
     const result = await response.json();
     assert.equal(response.status, 401, `${table}: anonymous access must be rejected`);
