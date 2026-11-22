@@ -5,7 +5,12 @@ import { formatNumber, friendlyError } from '../lib/game';
 export default function ShopTab({ adapter, game }) {
   const [catalog, setCatalog] = useState([]);
   const [inventory, setInventory] = useState([]);
+  const [itemPage, setItemPage] = useState(0);
+  const [inventoryPage, setInventoryPage] = useState(0);
+  const [moreItems, setMoreItems] = useState(false);
+  const [moreInventory, setMoreInventory] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(null);
   const [error, setError] = useState('');
   const [working, setWorking] = useState(null);
   const version = useRef(0);
@@ -19,6 +24,10 @@ export default function ShopTab({ adapter, game }) {
       if (current !== version.current) return;
       setCatalog(result.items);
       setInventory(result.inventory);
+      setItemPage(0);
+      setInventoryPage(0);
+      setMoreItems(result.moreItems);
+      setMoreInventory(result.moreInventory);
       setError('');
     } catch (err) {
       if (current === version.current) setError(friendlyError(err));
@@ -29,7 +38,29 @@ export default function ShopTab({ adapter, game }) {
   useEffect(() => {
     load();
     return () => { version.current++; };
-  }, [load, profile?.coins, profile?.xp, profile?.active_badge_id]);
+  }, [load, profile]);
+  async function loadMore(kind) {
+    if (loading || loadingMore || game.busy || game.pending) return;
+    const current = version.current;
+    const page = kind === 'items' ? itemPage + 1 : inventoryPage + 1;
+    setLoadingMore(kind);
+    try {
+      const result = await adapter.readShopPage(kind, profile.progress_epoch, page);
+      if (current !== version.current) return;
+      if (kind === 'items') {
+        setCatalog(previous => [...previous, ...result.rows]);
+        setItemPage(page);
+        setMoreItems(result.hasMore);
+      } else {
+        setInventory(previous => [...previous, ...result.rows]);
+        setInventoryPage(page);
+        setMoreInventory(result.hasMore);
+      }
+      setError('');
+    } catch (err) {
+      if (current === version.current) setError(friendlyError(err));
+    } finally { setLoadingMore(null); }
+  }
   async function act(method, args, id) {
     if (working || game.busy || game.pending) return;
     setWorking(id);
@@ -37,15 +68,14 @@ export default function ShopTab({ adapter, game }) {
     if (!success) await load();
     setWorking(null);
   }
-  const owned = new Set(inventory.map(item => item.item_id));
   return <section className="shop-section" aria-labelledby="shop-title" aria-busy={loading}>
     <div className="list-header"><div><h2 id="shop-title">Магазин наград</h2><span className="list-count">{catalog.length}</span></div><span className="shop-balance"><Coins size={15} /> {formatNumber(profile?.coins || 0)} монет</span></div>
     <p className="shop-intro">Титулы остаются с тобой до сброса прогресса. Зелье опыта начисляет XP сразу при покупке.</p>
-    {error && <div className="notice error" role="alert">{error}</div>}
+    {error && <div className="notice error" role="alert">{error} <button className="secondary" onClick={load} disabled={loading}>Повторить загрузку</button></div>}
     {!catalog.length && loading ? <div className="empty-state" role="status"><LoaderCircle className="spin" /><p>Загружаем каталог…</p></div>
       : !catalog.length ? <div className="empty-state"><ShoppingBag size={26} /><h3>Магазин пока пуст</h3><p>Новые награды появятся после публикации.</p></div>
         : <div className="shop-grid">{catalog.map(item => {
-          const isOwned = item.type === 'badge' && owned.has(item.id);
+          const isOwned = item.type === 'badge' && item.owned;
           const affordable = Number(profile?.coins || 0) >= item.price;
           return <article className="shop-card glass" key={item.id}>
             <div className="shop-icon" aria-hidden="true">{item.icon}</div>
@@ -62,6 +92,7 @@ export default function ShopTab({ adapter, game }) {
               </button></div>
           </article>;
         })}</div>}
+    {moreItems && <div className="pagination"><button className="secondary" disabled={loading || Boolean(loadingMore) || game.busy || Boolean(game.pending)} onClick={() => loadMore('items')}>{loadingMore === 'items' ? 'Загружаем…' : 'Показать ещё товары'}</button></div>}
     <div className="list-header inventory-heading"><div><h2>Мои титулы</h2><span className="list-count">{inventory.length}</span></div></div>
     {inventory.length ? <div className="inventory-list">{inventory.map(item => <article className="inventory-row glass" key={item.id}>
       <span className="inventory-icon" aria-hidden="true">{item.shop_items?.icon || '🏅'}</span>
@@ -71,6 +102,7 @@ export default function ShopTab({ adapter, game }) {
         {working === item.id ? <LoaderCircle className="spin" size={15} /> : profile?.active_badge_id === item.id ? 'Снять' : 'Выбрать'}
       </button>
     </article>)}</div> : <div className="empty-state inventory-empty"><Sparkles size={24} /><p>Первый титул ждёт тебя в магазине.</p></div>}
+    {moreInventory && <div className="pagination"><button className="secondary" disabled={loading || Boolean(loadingMore) || game.busy || Boolean(game.pending)} onClick={() => loadMore('inventory')}>{loadingMore === 'inventory' ? 'Загружаем…' : 'Показать ещё титулы'}</button></div>}
     {profile?.active_badge_id && <p className="shop-footnote"><Zap size={14} /> Активный титул виден в твоём профиле.</p>}
   </section>;
 }

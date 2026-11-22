@@ -1,4 +1,4 @@
-import { difficulties, textLength } from '../lib/game';
+import { difficulties, textLength } from '../lib/game.js';
 
 export function createDemoAdapter(role = 'user') {
   let profile;
@@ -55,7 +55,18 @@ export function createDemoAdapter(role = 'user') {
       });
       return structuredClone({ challenges: items, next_cursor: null, server_time: new Date().toISOString() });
     },
-    async readShop() { return structuredClone({ items: shopItems.filter(item => !item.archived_at), inventory }); },
+    async readShopPage(kind, _epoch, page = 0) {
+      const values = kind === 'items' ? shopItems.filter(item => !item.archived_at) : kind === 'inventory' ? inventory : null;
+      if (!values || !Number.isInteger(page) || page < 0) throw new Error('VALIDATION_ERROR');
+      const rows = values.slice(page * 20, page * 20 + 20).map(item => kind === 'items'
+        ? { ...item, owned: inventory.some(entry => entry.item_id === item.id) } : item);
+      return structuredClone({ rows, hasMore: values.length > (page + 1) * 20 });
+    },
+    async readShop(epoch) {
+      const items = await this.readShopPage('items', epoch);
+      const titles = await this.readShopPage('inventory', epoch);
+      return { items: items.rows, inventory: titles.rows, moreItems: items.hasMore, moreInventory: titles.hasMore };
+    },
     async readAdmin(section) {
       if (role !== 'admin') throw new Error('FORBIDDEN');
       adminUsers[0] = { ...adminUsers[0], role: profile.role, xp: profile.xp, coins: profile.coins,

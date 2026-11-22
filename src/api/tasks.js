@@ -53,16 +53,35 @@ export function createRemoteAdapter(userId) {
       if (error) throw error;
       return data;
     },
+    async readShopPage(kind, epoch, page = 0) {
+      if (!['items', 'inventory'].includes(kind) || !Number.isInteger(page) || page < 0) throw new Error('VALIDATION_ERROR');
+      const offset = page * 20;
+      const query = kind === 'items'
+        ? supabase.from('shop_items').select('id,title,icon,price,type,bonus_xp,created_at').is('archived_at', null)
+          .order('created_at', { ascending: false }).order('id').range(offset, offset + 20)
+        : supabase.from('user_inventory').select('id,item_id,purchased_at,shop_items(title,icon,archived_at)')
+          .eq('user_id', userId).eq('progress_epoch', epoch)
+          .order('purchased_at', { ascending: false }).order('id').range(offset, offset + 20);
+      const { data, error } = await query;
+      if (error) throw error;
+      const rows = data.slice(0, 20);
+      if (kind === 'items') {
+        const badgeIds = rows.filter(item => item.type === 'badge').map(item => item.id);
+        if (badgeIds.length) {
+          const owned = await supabase.from('user_inventory').select('item_id')
+            .eq('user_id', userId).eq('progress_epoch', epoch).in('item_id', badgeIds);
+          if (owned.error) throw owned.error;
+          const ownedIds = new Set(owned.data.map(item => item.item_id));
+          rows.forEach(item => { item.owned = ownedIds.has(item.id); });
+        }
+      }
+      return { rows, hasMore: data.length > 20 };
+    },
     async readShop(epoch) {
       const [items, inventory] = await Promise.all([
-        supabase.from('shop_items').select('id,title,icon,price,type,bonus_xp,created_at').is('archived_at', null)
-          .order('created_at', { ascending: false }).order('id').limit(100),
-        supabase.from('user_inventory').select('id,item_id,purchased_at,shop_items(title,icon,archived_at)')
-          .eq('user_id', userId).eq('progress_epoch', epoch).order('purchased_at', { ascending: false }).limit(100),
+        this.readShopPage('items', epoch), this.readShopPage('inventory', epoch),
       ]);
-      if (items.error) throw items.error;
-      if (inventory.error) throw inventory.error;
-      return { items: items.data, inventory: inventory.data };
+      return { items: items.rows, inventory: inventory.rows, moreItems: items.hasMore, moreInventory: inventory.hasMore };
     },
     async readAdmin(section, cursor = null) {
       const method = { challenges: 'admin_list_challenges', items: 'admin_list_items', users: 'admin_list_users' }[section];
