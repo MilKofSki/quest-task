@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<title>QuestTask — облачная проверка</title>
+<style>
+  body { font: 16px/1.5 system-ui; max-width: 850px; margin: 2rem auto; padding: 0 1rem; }
+  label { display: block; margin: 1rem 0; }
+  input { font: inherit; padding: .4rem; width: 20rem; max-width: 100%; }
+  button { font: inherit; padding: .5rem 1rem; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #eee; padding: 1rem; }
+</style>
+<h1>QuestTask — облачная проверка</h1>
+<p>Только для отдельного тестового игрока. Проверка создаст несколько задач и купит один бонус XP. Пароль и токен не выводятся.</p>
+<label>Подтвердите email тестового игрока <input id="email" type="email" autocomplete="off"></label>
+<button id="run">Проверить права и одновременные запросы</button>
+<pre id="log" role="status"></pre>
+<script type="module">
+import { supabase } from '/src/lib/supabaseClient.js';
+
+const output = document.querySelector('#log');
+const button = document.querySelector('#run');
+const line = value => { output.textContent += `${value}\n`; };
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const rpc = async (name, args) => {
+  const result = await supabase.rpc(name, args);
+  if (result.error) throw new Error(`${name}: ${result.error.message}`);
+  return result.data;
+};
+const requestId = () => crypto.randomUUID();
+
+button.addEventListener('click', async () => {
+  button.disabled = true;
+  output.textContent = '';
+  try {
+    assert(supabase, 'Supabase не настроен');
+    const { data: auth, error: authError } = await supabase.auth.getUser();
+    assert(!authError && auth.user, 'Нет действующей сессии');
+    const expectedEmail = document.querySelector('#email').value.trim().toLowerCase();
+    assert(expectedEmail && auth.user.email?.toLowerCase() === expectedEmail, 'Это не указанный тестовый аккаунт');
+    const uid = auth.user.id;
+    const getProfile = async () => {
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', uid).single();
+      assert(!error, `Чтение профиля: ${error?.message}`);
+      return data;
+    };
+    const profile = await getProfile();
+    assert(profile.role === 'user', 'Проверка требует роль обычного игрока');
+    const epoch = profile.progress_epoch;
+    line('Аккаунт подтверждён, роль: игрок.');
+
+    const denied = await supabase.rpc('admin_list_users', { p_limit: 20, p_cursor: null });
+    assert(denied.error && /FORBIDDEN/.test(denied.error.message), 'Игрок получил доступ к списку админа');
+    const otherProfiles = await supabase.from('profiles').select('id').neq('id', uid);
+    assert(!otherProfiles.error && otherProfiles.data.length === 0, 'Игрок видит чужие профили');
+    const otherTasks = await supabase.from('tasks').select('id').neq('user_id', uid);
+    assert(!otherTasks.error && otherTasks.data.length === 0, 'Игрок видит чужие задачи');
+    const directWrite = await supabase.from('profiles').update({ coins: 999999 }).eq('id', uid).select('id');
+    assert(directWrite.error, 'Прямая запись баланса оказалась доступна');
+    line('Права: админ-RPC и чужие данные недоступны, прямая запись баланса отклонена.');
+
+    const beforeTask = await getProfile();
+    const task = await rpc('create_task', { p_title: `Проверка гонки ${requestId()}`,
+      p_difficulty: 'hard', p_expected_epoch: epoch, p_request_id: requestId() });
+    const taskId = task.task.id;
+    try {
+      const ids = Array.from({ length: 10 }, requestId);
+      const results = await Promise.all(ids.map(id => supabase.rpc('complete_task', {
+        p_task_id: taskId, p_expected_epoch: epoch, p_request_id: id,
+      })));
+      const won = results.filter(result => !result.error);
+      const lost = results.filter(result => result.error);
+      assert(won.length === 1 && lost.length === 9, `Завершение задачи: успехов ${won.length}, отказов ${lost.length}`);
+      assert(lost.every(result => /TASK_ALREADY_COMPLETED/.test(result.error.message)), 'Неожиданная ошибка при гонке задач');
+      const afterTask = await getProfile();
+      assert(afterTask.xp - beforeTask.xp === 50 && afterTask.coins - beforeTask.coins === 30,
+        'Награда за задачу начислена неверно');
+      line('10 одновременных завершений: 1 успех, 9 отказов; награда +50 XP / +30 монет ровно один раз.');
+    } finally {
+      await rpc('archive_task', { p_task_id: taskId, p_expected_epoch: epoch, p_request_id: requestId() });
+    }
+
+    const itemResult = await supabase.from('shop_items').select('id,title,price,bonus_xp')
+      .eq('type', 'bonus').is('archived_at', null).gte('price', 30)
+      .order('price', { ascending: false }).limit(1).single();
+    assert(!itemResult.error, `Не найден активный бонус XP: ${itemResult.error?.message}`);
+    const item = itemResult.data;
+    let balance = await getProfile();
+    assert(balance.coins < 2 * item.price, 'Баланс позволяет купить несколько бонусов; тест остановлен без новых покупок');
+    let prepCount = 0;
+    while (balance.coins < item.price && prepCount < 20) {
+      const prep = await rpc('create_task', { p_title: `Подготовка к проверке покупки ${requestId()}`,
+        p_difficulty: 'hard', p_expected_epoch: epoch, p_request_id: requestId() });
+      await rpc('complete_task', { p_task_id: prep.task.id, p_expected_epoch: epoch, p_request_id: requestId() });
+      await rpc('archive_task', { p_task_id: prep.task.id, p_expected_epoch: epoch, p_request_id: requestId() });
+      balance = await getProfile();
+      prepCount++;
+    }
+    assert(balance.coins >= item.price && balance.coins < 2 * item.price, 'Не удалось подготовить баланс для одной покупки');
+    const purchaseCount = async () => {
+      const result = await supabase.from('purchases').select('id', { count: 'exact', head: true })
+        .eq('user_id', uid).eq('progress_epoch', epoch);
+      assert(!result.error, `Чтение покупок: ${result.error?.message}`);
+      return result.count;
+    };
+    const countBefore = await purchaseCount();
+    const purchaseIds = Array.from({ length: 10 }, requestId);
+    const results = await Promise.all(purchaseIds.map(id => supabase.rpc('buy_item', {
+      p_item_id: item.id, p_expected_epoch: epoch, p_request_id: id,
+    })));
+    const won = results.map((result, index) => ({ result, index })).filter(({ result }) => !result.error);
+    const lost = results.filter(result => result.error);
+    assert(won.length === 1 && lost.length === 9, `Покупка: успехов ${won.length}, отказов ${lost.length}`);
+    assert(lost.every(result => /INSUFFICIENT_COINS/.test(result.error.message)), 'Неожиданная ошибка при гонке покупок');
+    const afterPurchase = await getProfile();
+    assert(afterPurchase.coins === balance.coins - item.price && afterPurchase.xp === balance.xp + item.bonus_xp,
+      'Баланс после покупки неверен');
+    assert(await purchaseCount() === countBefore + 1, 'Количество покупок изменилось не на один');
+    const replay = await rpc('buy_item', { p_item_id: item.id, p_expected_epoch: epoch,
+      p_request_id: purchaseIds[won[0].index] });
+    assert(replay.replayed === true, 'Повтор запроса не отмечен как replay');
+    const afterReplay = await getProfile();
+    assert(afterReplay.coins === afterPurchase.coins && afterReplay.xp === afterPurchase.xp
+      && await purchaseCount() === countBefore + 1, 'Повтор запроса изменил баланс или покупки');
+    line(`10 одновременных покупок «${item.title}»: 1 успех, 9 отказов; списание и бонус ровно один раз.`);
+    line(`Повтор успешного request_id: без второго списания. Итог: ${afterReplay.xp} XP, ${afterReplay.coins} монет.`);
+    line('ИТОГ: ВСЕ ПРОВЕРКИ ПРОШЛИ');
+  } catch (error) {
+    line(`ОШИБКА: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</html>
