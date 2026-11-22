@@ -4,6 +4,8 @@ import { Zap, ListTodo, Swords, ShoppingBag, Shield, Sparkles, ArrowUpRight, Coi
   ArrowRight, CircleCheck, LoaderCircle, Flag, X } from 'lucide-react';
 import { useTasks } from '../hooks/useTasks';
 import ChallengesTab from './ChallengesTab';
+import ShopTab from './ShopTab';
+import AdminTab from './AdminTab';
 import { difficulties, levelOf, progressOf, formatNumber, textLength, friendlyError } from '../lib/game';
 
 function DeleteDialog({ task, onClose, onConfirm, busy }) {
@@ -36,6 +38,7 @@ export default function Dashboard({ adapter, onSignOut, section = 'tasks' }) {
   const level = levelOf(profile?.xp || 0);
   const progress = progressOf(profile?.xp || 0);
   const today = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' }).format(new Date());
+  const sectionTitle = { tasks: 'Мои задачи', challenges: 'Челленджи', shop: 'Магазин наград', admin: 'Админ-панель' }[section];
   async function addTask(event) {
     event.preventDefault();
     if (disabled) return;
@@ -54,12 +57,9 @@ export default function Dashboard({ adapter, onSignOut, section = 'tasks' }) {
       <nav aria-label="Основная навигация">
         <a className={`nav-item ${section === 'tasks' ? 'active' : ''}`} href="#/tasks" aria-current={section === 'tasks' ? 'page' : undefined}><ListTodo size={19} /><span>Мои задачи</span><span className="nav-count">{data?.active ?? '—'}</span></a>
         <a className={`nav-item ${section === 'challenges' ? 'active' : ''}`} href="#/challenges" aria-current={section === 'challenges' ? 'page' : undefined}><Swords size={18} /><span>Челленджи</span></a>
+        <a className={`nav-item ${section === 'shop' ? 'active' : ''}`} href="#/shop" aria-current={section === 'shop' ? 'page' : undefined}><ShoppingBag size={18} /><span>Магазин</span></a>
+        {profile?.role === 'admin' && <a className={`nav-item ${section === 'admin' ? 'active' : ''}`} href="#/admin" aria-current={section === 'admin' ? 'page' : undefined}><Shield size={18} /><span>Админ-панель</span></a>}
       </nav>
-      <div className="next-nav" aria-label="В следующих этапах разработки">
-        <span className="sidebar-kicker">СЛЕДУЮЩИЕ ЭТАПЫ</span>
-        <div className="nav-item planned"><ShoppingBag size={18} /><span>Магазин</span><span className="soon">скоро</span></div>
-        <div className="nav-item planned"><Shield size={18} /><span>Админ-панель</span><span className="soon">скоро</span></div>
-      </div>
       <div className="sidebar-bottom">
         <div className="level-card">
           <div className="level-symbol"><Shield size={25} /><b>{level}</b></div>
@@ -69,27 +69,27 @@ export default function Dashboard({ adapter, onSignOut, section = 'tasks' }) {
           <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
           <div className="progress-caption"><span>{progress} XP</span><span>100 XP</span></div>
         </div>
-        <div className="sidebar-foot"><span className="online-dot" /> {demo ? 'Локальный деморежим' : 'Прогресс в твоём аккаунте'}<small>QuestTask · первый этап</small></div>
+        <div className="sidebar-foot"><span className="online-dot" /> {demo ? 'Локальный деморежим' : 'Прогресс в твоём аккаунте'}<small>QuestTask</small></div>
       </div>
     </aside>
     <div className="workspace">
       <header className="topbar">
-        <div className="breadcrumb">Приключение <ChevronRight size={13} /><span>{section === 'challenges' ? 'Челленджи' : 'Мои задачи'}</span></div>
+        <div className="breadcrumb">Приключение <ChevronRight size={13} /><span>{sectionTitle}</span></div>
         <div className="topbar-actions">
           <span className={`mode-label ${demo ? 'demo' : ''}`}><i />{demo ? 'Демо' : 'Аккаунт'}</span>
           <span className="profile-avatar">{profile?.nickname?.slice(0, 1) || '?'}</span>
-          <div className="profile-name"><strong>{profile?.nickname || 'Загрузка…'}</strong><span>{profile?.role === 'admin' ? 'Администратор' : 'Искатель приключений'}</span></div>
+          <div className="profile-name"><strong>{profile?.nickname || 'Загрузка…'}</strong><span>{profile?.active_badge ? `${profile.active_badge.icon} ${profile.active_badge.title}` : profile?.role === 'admin' ? 'Администратор' : 'Искатель приключений'}</span></div>
           <button className="icon-button logout" aria-label="Выйти" title="Выйти" onClick={logout} disabled={loggingOut || busy}><LogOut size={18} /></button>
         </div>
       </header>
       <main id="main-content">
-        <div className="page-heading"><div><p className="eyebrow">{today} <span className="date-dot">·</span> ТВОЙ НОВЫЙ ШАГ</p><h1>{section === 'challenges' ? 'Челленджи' : 'Мои задачи'}<span className="heading-dot">.</span></h1><p className="muted">{section === 'challenges' ? 'Выполняй условия и забирай награды.' : 'Большие приключения начинаются с маленьких дел.'}</p></div><button className="secondary refresh" onClick={game.refresh} disabled={loading || busy} aria-label="Обновить данные"><RefreshCw size={15} className={loading ? 'spin' : ''} /><span>Обновить</span></button></div>
+        <div className="page-heading"><div><p className="eyebrow">{today} <span className="date-dot">·</span> ТВОЙ НОВЫЙ ШАГ</p><h1>{sectionTitle}<span className="heading-dot">.</span></h1><p className="muted">{section === 'challenges' ? 'Выполняй условия и забирай награды.' : section === 'shop' ? 'Обменивай монеты на титулы и опыт.' : section === 'admin' ? 'Управляй челленджами, магазином и ролями.' : 'Большие приключения начинаются с маленьких дел.'}</p></div><button className="secondary refresh" onClick={game.refresh} disabled={loading || busy} aria-label="Обновить данные"><RefreshCw size={15} className={loading ? 'spin' : ''} /><span>Обновить</span></button></div>
         {demo && <div className="demo-strip"><Sparkles size={16} /><p><strong>Ты в деморежиме.</strong> Данные локальные и сбрасываются при обновлении страницы.</p><button onClick={game.reset} disabled={busy || loading} aria-label="Начать заново"><RotateCcw size={14} /><span>Начать заново</span></button></div>}
         {(error || logoutError) && <div className="notice error" role="alert">{error || logoutError}</div>}
         {notice && <div className="notice success" role="status"><CircleCheck size={17} />{notice}</div>}
         {pending && <div className="notice pending" role="alert"><p>{pending.invalid ? 'Сохранённый запрос повреждён. Не создавайте повторный запрос: обратитесь к разработчику.' : 'Результат предыдущего запроса ещё не подтверждён. Повтор безопасен: награда начисляется только один раз.'}</p>{!pending.invalid && <button className="secondary" disabled={busy || loading} onClick={() => game.mutate(null, {}, true)}>Повторить запрос</button>}</div>}
         <section className="journey-hero glass" aria-label="Твой игровой прогресс">
-          <div className="hero-copy"><span className="hero-tag"><Zap size={13} fill="currentColor" /> ВРЕМЯ ДЛЯ НОВОЙ ПОБЕДЫ</span><h2>Прокачивай себя.<br /><span>По одной задаче.</span></h2><p>Выбери квест, сделай шаг и забери заслуженную награду.</p><button className="hero-link" onClick={() => { if (section === 'challenges') window.location.hash = '#/tasks'; else { input.current?.focus(); input.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }}>{section === 'challenges' ? 'Перейти к задачам' : 'Какой твой следующий шаг?'} <ArrowUpRight size={17} /></button></div>
+          <div className="hero-copy"><span className="hero-tag"><Zap size={13} fill="currentColor" /> ВРЕМЯ ДЛЯ НОВОЙ ПОБЕДЫ</span><h2>Прокачивай себя.<br /><span>По одной задаче.</span></h2><p>Выбери квест, сделай шаг и забери заслуженную награду.</p><button className="hero-link" onClick={() => { if (section !== 'tasks') window.location.hash = '#/tasks'; else { input.current?.focus(); input.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }}>{section !== 'tasks' ? 'Перейти к задачам' : 'Какой твой следующий шаг?'} <ArrowUpRight size={17} /></button></div>
           <div className="hero-art" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><span className="star star-a">✦</span><span className="star star-b">✧</span><div className="hero-crystal"><Zap size={64} fill="currentColor" strokeWidth={1.1} /></div><span className="art-caption">LEVEL {String(level).padStart(2, '0')}</span></div>
         </section>
         <section className="stat-grid" aria-label="Статистика игрока">
@@ -120,7 +120,7 @@ export default function Dashboard({ adapter, onSignOut, section = 'tasks' }) {
             </div>)}
           </div> : <div className="empty-state"><span className="empty-icon"><Flag size={26} /></span><h3>{game.filter === 'completed' ? 'Первая победа ещё впереди' : game.filter === 'active' ? 'Все квесты завершены' : 'Здесь начинается твоё приключение'}</h3><p>{game.filter === 'completed' ? 'Выполни любую задачу, и она появится здесь.' : 'Добавь задачу выше — даже маленький шаг приносит опыт.'}</p></div>}
           {data?.count > 20 && <div className="pagination"><button className="secondary" disabled={game.page === 0 || loading || busy} onClick={() => game.setPage(game.page - 1)}><ChevronLeft size={16} /> Назад</button><span>Страница {game.page + 1} из {Math.ceil(data.count / 20)}</span><button className="secondary" disabled={(game.page + 1) * 20 >= data.count || loading || busy} onClick={() => game.setPage(game.page + 1)}>Далее <ChevronRight size={16} /></button></div>}
-        </section></> : <ChallengesTab adapter={adapter} game={game} />}
+        </section></> : section === 'challenges' ? <ChallengesTab adapter={adapter} game={game} /> : section === 'shop' ? <ShopTab adapter={adapter} game={game} /> : <AdminTab adapter={adapter} game={game} />}
         <footer className="workspace-footer"><ShieldCheckMini /><span>Не сравнивай свой прогресс с чужим. Просто двигайся вперёд.</span><span className="footer-version">СДЕЛАНО ДЛЯ ТВОИХ ПОБЕД</span></footer>
       </main>
     </div>

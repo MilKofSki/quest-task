@@ -10,7 +10,7 @@ import Dashboard from './components/Dashboard';
 export default function App() {
   const [session, setSession] = useState(null);
   const [ready, setReady] = useState(!supabase);
-  const [demo, setDemo] = useState(false);
+  const [demoRole, setDemoRole] = useState(null);
   const [authError, setAuthError] = useState('');
   useEffect(() => {
     if (!supabase) return;
@@ -29,9 +29,9 @@ export default function App() {
     return () => { alive = false; data.subscription.unsubscribe(); };
   }, []);
   const userId = session?.user?.id;
-  const adapter = useMemo(() => demo ? createDemoAdapter() : userId ? createRemoteAdapter(userId) : null, [demo, userId]);
+  const adapter = useMemo(() => demoRole ? createDemoAdapter(demoRole) : userId ? createRemoteAdapter(userId) : null, [demoRole, userId]);
   async function signOut() {
-    if (demo) { setDemo(false); return; }
+    if (demoRole) { setDemoRole(null); return; }
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
     setSession(null);
@@ -39,11 +39,17 @@ export default function App() {
   if (!ready) return <div className="loading-screen" role="status"><LoaderCircle className="spin" /> Восстанавливаем сессию…</div>;
   return <Routes>
     <Route path="/tasks" element={adapter
-      ? <Dashboard key={demo ? 'demo' : userId} adapter={adapter} onSignOut={signOut} section="tasks" />
-      : <AuthScreen initialError={authError} onDemo={() => setDemo(true)} />} />
+      ? <Dashboard key={demoRole ? `demo-${demoRole}` : userId} adapter={adapter} onSignOut={signOut} section="tasks" />
+      : <AuthScreen initialError={authError} onDemo={() => setDemoRole('user')} onDemoAdmin={() => setDemoRole('admin')} />} />
     <Route path="/challenges" element={adapter
-      ? <Dashboard key={demo ? 'demo' : userId} adapter={adapter} onSignOut={signOut} section="challenges" />
-      : <AuthScreen initialError={authError} onDemo={() => setDemo(true)} />} />
+      ? <Dashboard key={demoRole ? `demo-${demoRole}` : userId} adapter={adapter} onSignOut={signOut} section="challenges" />
+      : <AuthScreen initialError={authError} onDemo={() => setDemoRole('user')} onDemoAdmin={() => setDemoRole('admin')} />} />
+    <Route path="/shop" element={adapter
+      ? <Dashboard key={demoRole ? `demo-${demoRole}` : userId} adapter={adapter} onSignOut={signOut} section="shop" />
+      : <AuthScreen initialError={authError} onDemo={() => setDemoRole('user')} onDemoAdmin={() => setDemoRole('admin')} />} />
+    <Route path="/admin" element={adapter
+      ? <Dashboard key={demoRole ? `demo-${demoRole}` : userId} adapter={adapter} onSignOut={signOut} section="admin" />
+      : <AuthScreen initialError={authError} onDemo={() => setDemoRole('user')} onDemoAdmin={() => setDemoRole('admin')} />} />
     <Route path="*" element={<Navigate to="/tasks" replace />} />
   </Routes>;
 }

@@ -45,7 +45,8 @@ export function useTasks(adapter) {
     setBusy(true); setError(''); setNotice('');
     let result;
     try {
-      result = await adapter.mutate(method, { ...args, p_expected_epoch: data.profile.progress_epoch }, retry ? currentPending : null);
+      const epochMethod = ['create_task', 'complete_task', 'archive_task', 'claim_challenge', 'buy_item', 'equip_badge'].includes(method);
+      result = await adapter.mutate(method, epochMethod ? { ...args, p_expected_epoch: data.profile.progress_epoch } : args, retry ? currentPending : null);
     } catch (err) {
       if (mounted.current) { setPending(adapter.getPending()); setError(friendlyError(err)); }
       // A rejected operation may reveal stale state, but keep its error visible.
@@ -64,6 +65,9 @@ export function useTasks(adapter) {
         : result.superseded ? 'Найден результат прошлого прогресса. Текущие данные обновлены.'
         : result.replayed ? 'Запрос уже был обработан. Данные обновлены без повторного начисления.'
         : effectiveMethod === 'claim_challenge' ? `Награда за челлендж получена! +${result.reward_xp} XP и +${result.reward_coins} монет.`
+        : effectiveMethod === 'buy_item' ? result.item_type === 'bonus' ? `Зелье куплено: +${result.granted_xp} XP, −${result.paid_coins} монет.` : `Титул куплен за ${result.paid_coins} монет и добавлен в инвентарь.`
+        : effectiveMethod === 'equip_badge' ? result.active_badge_id ? 'Титул выбран.' : 'Титул снят.'
+        : effectiveMethod?.startsWith('admin_') ? adapter.kind === 'demo' ? 'Изменение сохранено в деморежиме.' : 'Изменение сохранено на сервере.'
         : result.reward_xp ? `Квест завершён! +${result.reward_xp} XP и +${result.reward_coins} монет.`
         : effectiveMethod === 'create_task' ? 'Новый квест добавлен. Всё начинается с первого шага.' : 'Задача удалена из списка. Заработанные награды сохранены.');
       setBusy(false);

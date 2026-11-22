@@ -11,7 +11,7 @@ before(async () => {
     create role anon nologin;
     create role authenticated nologin;
     create schema auth;
-    create table auth.users(id uuid primary key, raw_user_meta_data jsonb default '{}', email_confirmed_at timestamptz);
+    create table auth.users(id uuid primary key, email text, raw_user_meta_data jsonb default '{}', email_confirmed_at timestamptz);
     create function auth.uid() returns uuid language sql stable as $$
       select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
     $$;
@@ -20,13 +20,15 @@ before(async () => {
   `);
   await db.exec(await readFile(new URL('../supabase/migrations/202611170001_tasks_foundation.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../supabase/migrations/202611220001_challenges.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/202611220002_shop.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/202611220003_admin.sql', import.meta.url), 'utf8'));
 });
 after(async () => { await db?.close(); });
 
 async function user(confirmed = true, metadata = { nickname: 'Тестовый игрок' }) {
   const id = randomUUID();
-  await db.query('insert into auth.users(id,raw_user_meta_data,email_confirmed_at) values($1,$2,$3)',
-    [id, JSON.stringify(metadata), confirmed ? new Date().toISOString() : null]);
+  await db.query('insert into auth.users(id,email,raw_user_meta_data,email_confirmed_at) values($1,$2,$3,$4)',
+    [id, `${id}@example.test`, JSON.stringify(metadata), confirmed ? new Date().toISOString() : null]);
   return id;
 }
 async function asUser(id, sql, params = [], role = 'authenticated') {
@@ -50,6 +52,17 @@ async function challengeProgress(id) {
 }
 async function claim(id, challengeId, request = randomUUID()) {
   return (await asUser(id, 'select public.claim_challenge($1,1,$2) as result', [challengeId, request])).rows[0].result;
+}
+async function shopItem(id, type) {
+  return (await asUser(id, 'select id,price,bonus_xp from public.shop_items where type=$1 order by price limit 1', [type])).rows[0];
+}
+async function buy(id, itemId, request = randomUUID(), epoch = 1) {
+  return (await asUser(id, 'select public.buy_item($1,$2,$3) as result', [itemId, epoch, request])).rows[0].result;
+}
+async function admin(id) { await db.query("update public.profiles set role='admin' where id=$1", [id]); }
+async function adminCall(id, method, args) {
+  const placeholders = args.map((_, index) => `$${index + 1}`).join(',');
+  return (await asUser(id, `select public.${method}(${placeholders}) as result`, args)).rows[0].result;
 }
 
 test('registration ignores role and balance supplied through user metadata', async () => {
@@ -244,6 +257,132 @@ test('an event-write failure rolls back completion, balance AND operation receip
   assert.equal((await asUser(id, 'select completed_at from public.tasks where id=$1', [task.id])).rows[0].completed_at, null);
   await assert.rejects(asUser(id, 'select public.get_operation($1)', [key]), /NOT_FOUND/);
   assert.equal((await complete(id, task.id, key)).reward_xp, 50);
+});
+
+test('badge purchase, equip and replay preserve one owned item', async () => {
+  const id = await user(); const badge = await shopItem(id, 'badge');
+  await assert.rejects(buy(id, badge.id), /INSUFFICIENT_COINS/);
+  for (let i = 0; i < 2; i++) { const { task } = await create(id); await complete(id, task.id); }
+  const request = randomUUID(); const first = await buy(id, badge.id, request);
+  assert.equal(first.paid_coins, 50);
+  assert.equal((await buy(id, badge.id, request)).replayed, true);
+  await assert.rejects(buy(id, badge.id), /ITEM_ALREADY_OWNED/);
+  const inventory = await asUser(id, 'select * from public.user_inventory');
+  assert.equal(inventory.rows.length, 1);
+  assert.equal(Number((await profile(id)).coins), 10);
+  const equipped = await asUser(id, 'select public.equip_badge($1,1,$2) as result', [first.inventory_id, randomUUID()]);
+  assert.equal(equipped.rows[0].result.active_badge_id, first.inventory_id);
+  assert.equal((await profile(id)).active_badge_id, first.inventory_id);
+  await asUser(id, 'select public.equip_badge(null,1,$1)', [randomUUID()]);
+  assert.equal((await profile(id)).active_badge_id, null);
+});
+
+test('bonus can be purchased repeatedly with distinct keys, but not with one replay', async () => {
+  const id = await user(); const bonus = await shopItem(id, 'bonus');
+  for (let i = 0; i < 7; i++) { const { task } = await create(id); await complete(id, task.id); }
+  const key = randomUUID(); const first = await buy(id, bonus.id, key);
+  assert.equal(first.granted_xp, 50);
+  assert.equal((await buy(id, bonus.id, key)).replayed, true);
+  await buy(id, bonus.id);
+  const p = await profile(id);
+  assert.equal(Number(p.coins), 10);
+  assert.equal(Number(p.xp), 450);
+  assert.equal((await asUser(id, 'select * from public.user_inventory')).rows.length, 0);
+  assert.equal((await asUser(id, 'select * from public.purchases')).rows.length, 2);
+});
+
+test('shop writes are RPC-only; foreign badge and failed event cannot change balances', async () => {
+  const a = await user(); const b = await user(); const badge = await shopItem(a, 'badge');
+  for (let i = 0; i < 2; i++) { const { task } = await create(a); await complete(a, task.id); }
+  const owned = await buy(a, badge.id);
+  assert.equal((await asUser(b, 'select * from public.user_inventory')).rows.length, 0);
+  await assert.rejects(asUser(b, 'select public.equip_badge($1,1,$2)', [owned.inventory_id, randomUUID()]), /BADGE_NOT_OWNED/);
+  for (const sql of ['update public.profiles set active_badge_id=null', 'insert into public.shop_items(title,icon,price,type,bonus_xp) values(\'x\',\'x\',1,\'badge\',0)', 'delete from public.user_inventory', 'select * from private.economy_events'])
+    await assert.rejects(asUser(a, sql), /permission denied/);
+  for (let i = 0; i < 3; i++) { const { task } = await create(a); await complete(a, task.id); }
+  const before = await profile(a);
+  const key = randomUUID();
+  await db.exec(`create function private.fail_purchase_event() returns trigger language plpgsql as $$ begin
+    if new.reason = 'purchase' then raise exception 'TEST_FAILURE'; end if; return new; end; $$;
+    create trigger fail_purchase before insert on private.economy_events for each row execute function private.fail_purchase_event();`);
+  try { await assert.rejects(buy(a, (await shopItem(a, 'bonus')).id, key), /TEST_FAILURE/); }
+  finally { await db.exec('drop trigger fail_purchase on private.economy_events; drop function private.fail_purchase_event();'); }
+  assert.equal(Number((await profile(a)).coins), Number(before.coins));
+  await assert.rejects(asUser(a, 'select public.get_operation($1)', [key]), /NOT_FOUND/);
+});
+
+test('administration requires current server role and exposes only narrow user list', async () => {
+  const owner = await user(); const player = await user();
+  await assert.rejects(adminCall(player, 'admin_list_users', [20, null]), /FORBIDDEN/);
+  await assert.rejects(adminCall(player, 'admin_create_item', ['x', '⭐', 1, 'badge', 0, randomUUID()]), /FORBIDDEN/);
+  await admin(owner);
+  const listed = await adminCall(owner, 'admin_list_users', [1, null]);
+  assert.equal(listed.users.length, 1);
+  assert.ok(listed.next_cursor);
+  assert.match(listed.users[0].email, /@example\.test$/);
+  const next = await adminCall(owner, 'admin_list_users', [1, listed.next_cursor]);
+  assert.equal(next.users.length, 1);
+  await assert.rejects(asUser(player, 'select * from private.admin_audit'), /permission denied/);
+  await assert.rejects(asUser(owner, 'update public.profiles set role=\'admin\''), /permission denied/);
+});
+
+test('admin publishes immutable content and archives it without losing purchases', async () => {
+  const owner = await user(); const player = await user(); await admin(owner);
+  const challengeKey = randomUUID();
+  const challenge = await adminCall(owner, 'admin_create_challenge',
+    ['Новый рубеж', 'Заверши две задачи', 'tasks_total', 2, null, 40, 20, challengeKey]);
+  assert.equal(challenge.challenge.title, 'Новый рубеж');
+  assert.equal((await adminCall(owner, 'admin_create_challenge',
+    ['Новый рубеж', 'Заверши две задачи', 'tasks_total', 2, null, 40, 20, challengeKey])).replayed, true);
+  const item = await adminCall(owner, 'admin_create_item', ['Звёздный титул', '⭐', 30, 'badge', 0, randomUUID()]);
+  assert.equal(item.item.price, 30);
+  const { task } = await create(player); await complete(player, task.id);
+  const purchase = await buy(player, item.item.id);
+  await adminCall(owner, 'admin_archive_item', [item.item.id, randomUUID()]);
+  await adminCall(owner, 'admin_archive_challenge', [challenge.challenge.id, randomUUID()]);
+  await assert.rejects(buy(player, item.item.id), /ITEM_ARCHIVED/);
+  assert.equal((await asUser(player, 'select * from public.shop_items where id=$1', [item.item.id])).rows.length, 1);
+  assert.equal((await asUser(player, 'select * from public.challenges where id=$1', [challenge.challenge.id])).rows.length, 0);
+  assert.equal((await asUser(player, 'select * from public.user_inventory where id=$1', [purchase.inventory_id])).rows.length, 1);
+  await assert.rejects(db.query('update public.shop_items set price=1 where id=$1', [item.item.id]), /FORBIDDEN/);
+  await assert.rejects(db.query('update public.challenges set target_count=1 where id=$1', [challenge.challenge.id]), /FORBIDDEN/);
+  const listed = await adminCall(owner, 'admin_list_items', [20, null]);
+  assert.ok(listed.items.some(value => value.id === item.item.id && value.archived_at));
+  assert.ok((await db.query("select * from private.admin_audit where action='create_item' and target_id=$1", [item.item.id])).rows.length);
+});
+
+test('role changes reject self-demotion and enforce current role', async () => {
+  const owner = await user(); const teammate = await user(); await admin(owner);
+  await assert.rejects(adminCall(owner, 'admin_set_role', [owner, 'user', randomUUID()]), /SELF_ROLE_CHANGE/);
+  await adminCall(owner, 'admin_set_role', [teammate, 'admin', randomUUID()]);
+  assert.equal((await profile(teammate)).role, 'admin');
+  await adminCall(teammate, 'admin_set_role', [owner, 'user', randomUUID()]);
+  assert.equal((await profile(owner)).role, 'user');
+  await assert.rejects(adminCall(owner, 'admin_list_users', [20, null]), /FORBIDDEN/);
+  await assert.rejects(adminCall(teammate, 'admin_set_role', [teammate, 'user', randomUUID()]), /SELF_ROLE_CHANGE/);
+});
+
+test('admin reset starts a new epoch, preserves history and replays once', async () => {
+  const owner = await user(); const player = await user(); await admin(owner);
+  const { task } = await create(player); const completedKey = randomUUID(); await complete(player, task.id, completedKey);
+  const badge = await shopItem(player, 'badge'); const { task: second } = await create(player);
+  await complete(player, second.id);
+  const purchase = await buy(player, badge.id);
+  await asUser(player, 'select public.equip_badge($1,1,$2)', [purchase.inventory_id, randomUUID()]);
+  const key = randomUUID();
+  await assert.rejects(adminCall(owner, 'admin_reset_progress', [player, 1, 'x', randomUUID()]), /VALIDATION_ERROR/);
+  const reset = await adminCall(owner, 'admin_reset_progress', [player, 1, 'Начинаем новый сезон', key]);
+  assert.equal(reset.progress_epoch, 2);
+  assert.equal((await adminCall(owner, 'admin_reset_progress', [player, 1, 'Начинаем новый сезон', key])).replayed, true);
+  const p = await profile(player);
+  assert.equal(p.progress_epoch, 2); assert.equal(Number(p.xp), 0);
+  assert.equal(Number(p.coins), 0); assert.equal(p.active_badge_id, null);
+  assert.equal((await asUser(player, 'select * from public.tasks where progress_epoch=2')).rows.length, 0);
+  assert.equal((await asUser(player, 'select * from public.user_inventory where progress_epoch=2')).rows.length, 0);
+  assert.equal((await asUser(player, 'select * from public.purchases where progress_epoch=1')).rows.length, 1);
+  assert.equal((await asUser(player, 'select public.get_operation($1) as result', [completedKey])).rows[0].result.superseded, true);
+  await assert.rejects(buy(player, badge.id, randomUUID(), 1), /EPOCH_CHANGED/);
+  assert.equal((await db.query("select count(*)::int as n from private.economy_events where reason='reset' and user_id=$1", [player])).rows[0].n, 1);
 });
 
 test('all definer functions fix search_path and private functions have no public grants', async () => {

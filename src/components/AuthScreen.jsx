@@ -10,7 +10,7 @@ function rememberVerification(value) {
   try { value ? sessionStorage.setItem('questtask:verification', JSON.stringify(value)) : sessionStorage.removeItem('questtask:verification'); } catch { /* optional email-only recovery */ }
 }
 
-export default function AuthScreen({ onDemo, initialError }) {
+export default function AuthScreen({ onDemo, onDemoAdmin, initialError }) {
   const [saved] = useState(readVerification);
   const [mode, setMode] = useState(saved?.email ? 'verify' : 'login');
   const [email, setEmail] = useState(saved?.email || '');
@@ -106,7 +106,8 @@ export default function AuthScreen({ onDemo, initialError }) {
           <button className="text-button" disabled={busy} onClick={() => { rememberVerification(null); changeMode('login'); }}><ArrowLeft size={14} /> Вернуться ко входу</button>
         </div>}
         <div className="divider"><span>или познакомься с приложением</span></div>
-        <button className="demo-button" onClick={onDemo}><Sparkles size={17} /> Попробовать демо <ArrowRight size={16} /></button>
+        <button className="demo-button" onClick={onDemo}><Sparkles size={17} /> Демо-Игрок <ArrowRight size={16} /></button>
+        <button className="demo-button demo-admin-button" onClick={onDemoAdmin}><ShieldCheck size={17} /> Демо-Админ <ArrowRight size={16} /></button>
         <p className="form-footnote">Без регистрации. Демо-данные сбрасываются<br /> при выходе и обновлении страницы.</p>
       </div>
       <span className="auth-version">QUESTTASK · ПЕРВЫЕ ШАГИ</span>
