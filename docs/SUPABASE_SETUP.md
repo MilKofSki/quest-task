@@ -40,7 +40,9 @@ where schemaname in ('public', 'private')
 
 Используется именно Token, а не ConfirmationURL. Клиент вызывает verifyOtp с type='email' согласно текущему официальному примеру. Настройки длины/срока кода и реальный сценарий обязательно проверьте на своём проекте. [Шаблоны Supabase](https://supabase.com/docs/guides/auth/auth-email-templates), [verifyOtp](https://supabase.com/docs/reference/javascript/auth-verifyotp).
 
-В URL Configuration текущий Site URL — `http://127.0.0.1:5173`. Используйте этот адрес для локальной работы. Здесь после настройки шаблона подтверждение вводится вручную. После публикации задайте фактический адрес сайта и удалите ненужные адреса из рабочего окружения.
+В URL Configuration Site URL опубликованного приложения — `https://milkofski.github.io/quest-task/`. В Redirect URLs разрешены этот адрес, `http://127.0.0.1:5173/` и `http://localhost:5173/`. Локальные адреса нужны только при разработке. Здесь после настройки шаблона подтверждение вводится вручную.
+
+Для восстановления пароля приложение передаёт Supabase опубликованный адрес `https://milkofski.github.io/quest-task/` как `redirectTo`; он уже добавлен в **Redirect URLs** вместе с локальными адресами. В **Authentication → Email Templates → Reset Password** задайте тему `Сброс пароля QuestTask` и установите содержимое `supabase/templates/reset-password.html`, сохранив ссылку `{{ .ConfirmationURL }}`. После перехода по ссылке приложение предложит задать новый пароль длиной от 8 символов. Не отправляйте проверочные письма на рабочий ящик без необходимости.
 
 ## 4. Подключить доставку через Яндекс Почту
 
